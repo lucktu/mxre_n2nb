@@ -9,12 +9,18 @@
 
 
 #include "n2n.h"
-
+#include "n2n_transforms.h"
 
 #define N2N_SN_LPORT_DEFAULT SUPERNODE_PORT
 #define N2N_SN_PKTBUF_SIZE   2048
 
-#define N2N_SN_MGMT_PORT                5645
+#define N2N_SN_MGMT_PORT     5645
+
+/* Transform indices - same as edge.c */
+#define N2N_TRANSOP_NULL_IDX    0
+#define N2N_TRANSOP_TF_IDX      1
+#define N2N_TRANSOP_AESCBC_IDX  2
+#define N2N_TRANSOP_SPECK_IDX   3
 
 #ifndef _WIN32
 #include <poll.h>
@@ -39,11 +45,12 @@ struct n2n_sn
     sn_stats_t          stats;
     int                 daemon;         /* If non-zero then daemonise. */
     uint16_t            lport;          /* Local UDP port to bind to. */
-		uint16_t            mgmt_port;      /* Managing UDP ports */  
+    uint16_t            mgmt_port;      /* Managing UDP ports */
     SOCKET              sock;           /* Main socket for UDP traffic with edges. */
     SOCKET              sock6;
     SOCKET              mgmt_sock;      /* management socket. */
     struct peer_info *  edges;          /* Link list of registered edges. */
+    n2n_trans_op_t      transop[N2N_MAX_TRANSFORMS];
 };
 
 typedef struct n2n_sn n2n_sn_t;
@@ -78,6 +85,11 @@ static int init_sn( n2n_sn_t * sss )
     sss->sock6 = -1;
     sss->mgmt_sock = -1;
     sss->edges = NULL;
+    /* Initialize transforms - required to decode encrypted packets */
+    transop_null_init(    &(sss->transop[N2N_TRANSOP_NULL_IDX]) );
+    transop_twofish_init( &(sss->transop[N2N_TRANSOP_TF_IDX])  );
+    transop_aes_init( &(sss->transop[N2N_TRANSOP_AESCBC_IDX])  );
+    transop_speck_init( &(sss->transop[N2N_TRANSOP_SPECK_IDX]) );
 
     return 0; /* OK */
 }
@@ -765,11 +777,11 @@ int main( int argc, char * const argv[] )
                 break;
             case 't':
 #ifndef _WIN32
-						sss.mgmt_port = atoi(optarg);  
-						if (sss.mgmt_port == 0) {  
-								traceEvent(TRACE_ERROR, "Invalid management port: %s", optarg);  
-								exit(-1);  
-						}  
+						sss.mgmt_port = atoi(optarg);
+						if (sss.mgmt_port == 0) {
+								traceEvent(TRACE_ERROR, "Invalid management port: %s", optarg);
+								exit(-1);
+						}
 #endif
                 break;
             case 'f': /* foreground */

@@ -46,7 +46,7 @@ truncated to take the first 16 bytes.
 write usage then exit.
 .TP
 .B -B <encryption mode>
-Encryption mode selection: B0 = keyfile(-K), B1 = disable, B2 = twofish(-k), B3 = AES-CBC(-k)
+Encryption mode selection: B0 = keyfile(-K), B1 = disable, B2 = twofish(-k), B3 = AES-CBC(-k), B5 = Speck(-k)
 .TP
 .B -k <keystring>
 sets the encryption key from ASCII text (see also N2N_KEY in

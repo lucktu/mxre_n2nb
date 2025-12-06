@@ -25,6 +25,7 @@
 
 #include "n2n.h"
 #include "n2n_transforms.h"
+#include "speck.h"
 #include <assert.h>
 #include "minilzo.h"
 
@@ -77,6 +78,7 @@ char const* gcrypt_version;
 #define N2N_TRANSOP_NULL_IDX    0
 #define N2N_TRANSOP_TF_IDX      1
 #define N2N_TRANSOP_AESCBC_IDX  2
+#define N2N_TRANSOP_SPECK_IDX   3
 /* etc. */
 
 
@@ -233,6 +235,40 @@ static int readConfFile(const char * filename, char * const linebuffer) {
     return 0;
 }
 
+static int edge_init_speck( n2n_edge_t * eee, uint8_t *encrypt_pwd, uint64_t encrypt_pwd_len )
+{
+    n2n_cipherspec_t spec;
+    int retval;
+
+    /* Create a cipherspec for single-key Speck operation */
+    spec.t = N2N_TRANSFORM_ID_SPECK;
+    spec.valid_from = 0;
+    spec.valid_until = 0xFFFFFFFF;
+
+    /* Format: "0_hexkey" where 0 is SA ID */
+    snprintf((char*)spec.opaque, sizeof(spec.opaque), "0_");
+
+    /* Try hex first, if fails use ASCII directly */
+    int pstat = n2n_parse_hex(spec.opaque + 2, sizeof(spec.opaque) - 2,
+                             (char*)encrypt_pwd, encrypt_pwd_len);
+
+    if (pstat <= 0) {
+        /* Hex parsing failed, use ASCII directly */
+        memcpy(spec.opaque + 2, encrypt_pwd, encrypt_pwd_len);
+        spec.opaque[2 + encrypt_pwd_len] = '\0';
+        pstat = encrypt_pwd_len;
+    }
+
+    /* Add the spec to the Speck transform */
+    retval = (eee->transop[N2N_TRANSOP_SPECK_IDX].addspec)(
+                &(eee->transop[N2N_TRANSOP_SPECK_IDX]), &spec );
+
+    if (retval == 0) {
+        eee.tx_transop_idx = N2N_TRANSOP_SPECK_IDX;
+    }
+
+    return retval;
+}
 
 /* Create the argv vector */
 static char ** buildargv(int * effectiveargc, char * const linebuffer) {
@@ -310,6 +346,7 @@ static int edge_init(n2n_edge_t * eee)
     transop_null_init(    &(eee->transop[N2N_TRANSOP_NULL_IDX]) );
     transop_twofish_init( &(eee->transop[N2N_TRANSOP_TF_IDX]  ) );
     transop_aes_init( &(eee->transop[N2N_TRANSOP_AESCBC_IDX]  ) );
+				transop_speck_init( &(eee->transop[N2N_TRANSOP_SPECK_IDX]) );
 
     eee->tx_transop_idx = N2N_TRANSOP_NULL_IDX; /* No guarantee the others have been setup */
 
@@ -382,6 +419,16 @@ static int edge_init_aes( n2n_edge_t * eee, uint8_t *encrypt_pwd, uint64_t encry
     return retval;
 }
 
+static int edge_init_speck( n2n_edge_t * eee, uint8_t *encrypt_key, uint64_t encrypt_pwd_len )
+{
+    if (eee->transop[N2N_TRANSOP_SPECK_IDX].priv != NULL) {
+        transop_deinit_speck(&eee->transop[N2N_TRANSOP_SPECK_IDX]);
+    }
+
+    return setup_speck_key(eee->transop[N2N_TRANSOP_SPECK_IDX].priv,
+                          encrypt_key, encrypt_pwd_len);
+}
+
 /** Find the transop op-struct for the transform enumeration required.
  *
  * @return - index into the transop array, or -1 on failure.
@@ -399,11 +446,13 @@ static int transop_enum_to_index( n2n_transform_t id )
     case N2N_TRANSFORM_ID_AESCBC:
         return N2N_TRANSOP_AESCBC_IDX;
         break;
+				case N2N_TRANSFORM_ID_SPECK:
+								return N2N_TRANSOP_SPECK_IDX;
+								break;
     default:
         return -1;
     }
 }
-
 
 /** Called periodically to roll keys and do any periodic maintenance in the
  *  tranform operations state machines. */
@@ -431,10 +480,11 @@ static int n2n_tick_transop( n2n_edge_t * eee, time_t now )
         trop = N2N_TRANSOP_AESCBC_IDX;
     }
 
-    if ( trop != eee->tx_transop_idx )
+    tst = (eee->transop[N2N_TRANSOP_SPECK_IDX].tick)( &(eee->transop[N2N_TRANSOP_SPECK_IDX]), now );  /* Add this line */
+    if ( tst.can_tx )
     {
-        eee->tx_transop_idx = trop;
-        traceEvent( TRACE_NORMAL, "Chose new tx_transop_idx=%u", (unsigned int)(eee->tx_transop_idx) );
+        traceEvent( TRACE_DEBUG, "can_tx SPECK (idx=%u)", (unsigned int)N2N_TRANSOP_SPECK_IDX );
+        trop = N2N_TRANSOP_SPECK_IDX;
     }
 
     return 0;
@@ -602,8 +652,8 @@ static void help() {
     printf("-a <mode:IPv4/prefixlen> | Set interface IPv4 address. For DHCP use '-r -a dhcp:0.0.0.0/0'\n");
     printf("-A <IPv6>/<prefixlen>    | Set interface IPv6 address, only supported if IPv4 set to 'static'\n");
     printf("-c <community>           | n2n community name the edge belongs to.\n");
-		printf("-B <mode>                | Encryption: B0 = keyfile(-K), B1 = disable, B2 = twofish(-k), B3 = AES-CBC(-k)\n");
-		printf("                         : '-B3' can also be used as '-B 3' (for better compatibility)\n");
+				printf("-B <mode>                | Encryption: B0 = keyfile(-K), B1 = disable, B2 = twofish(-k), B3 = AES-CBC(-k), B5 = Speck(-k)\n");
+				printf("                         : '-B3' can also be used as '-B 3' (for better compatibility)\n");
     printf("-k <encrypt key>         | Encryption key (ASCII, max 32) - also N2N_KEY=<encrypt key>. Not with -K.\n");
     printf("-K <key file>            | Specify a key schedule file to load. Not with -k.\n");
     printf("-l <supernode host:port> | Supernode IP:port\n");
@@ -2476,9 +2526,9 @@ int main(int argc, char* argv[])
 						}
 
 						encrypt_mode = atoi(optarg);
-						if (encrypt_mode < 0 || encrypt_mode > 3) {
-								fprintf(stderr, "Error: Invalid encryption mode. Use B0-B3\n");
-								exit(1);
+						if (encrypt_mode < 0 || encrypt_mode > 5) {
+										fprintf(stderr, "Error: Invalid encryption mode. Use B0-B3, B5\n");
+										exit(1);
 						}
 						break;
 				}
@@ -2810,13 +2860,23 @@ int main(int argc, char* argv[])
 						fprintf(stderr, "Error: AES setup failed.\n");
 						return(-1);
 				}
+		} else if (encrypt_mode == 5) {
+						// B5 - Speck
+						if (!encrypt_key) {
+										fprintf(stderr, "Error: B5 mode requires -k <key>\n");
+										exit(1);
+						}
+						if(edge_init_speck(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
+										fprintf(stderr, "Error: Speck setup failed.\n");
+										return(-1);
+						}
+						eee.tx_transop_idx = N2N_TRANSOP_SPECK_IDX;
 		}
-
-    if ( encrypt_key ) {
-        if(edge_init_twofish( &eee, (uint8_t *)(encrypt_key), strlen(encrypt_key) ) < 0) {
-            fprintf(stderr, "Error: twofish setup failed.\n" );
-            return(-1);
-        }
+				if ( encrypt_key && encrypt_mode != 5 ) {
+								if(edge_init_twofish( &eee, (uint8_t *)(encrypt_key), strlen(encrypt_key) ) < 0) {
+												fprintf(stderr, "Error: twofish setup failed.\n" );
+												return(-1);
+								}
     } else if ( strlen(eee.keyschedule) > 0 ) {
         if (edge_init_keyschedule( &eee ) != 0 ) {
             fprintf(stderr, "Error: keyschedule setup failed.\n" );

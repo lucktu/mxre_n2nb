@@ -1,6 +1,6 @@
 /**
  * @brief Cryptographic random number generator
- * 
+ *
  * @file random.h
  * @author Max Resch <resch.max@gmail.com>
  */

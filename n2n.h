@@ -152,6 +152,7 @@ typedef struct route {
 /* N2N_IFNAMSIZ is needed on win32 even if dev_name is not used after declaration */
 #ifndef _WIN32
 #define N2N_IFNAMSIZ            16 /* 15 chars * NULL */
+#define N2N_MAX_TRANSFORMS      16
 
 typedef struct tuntap_dev {
   int             fd;
